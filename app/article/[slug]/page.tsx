@@ -4,6 +4,11 @@ import { articleDate, getPublishedArticle } from '@/lib/articles-db'
 
 export const dynamic = 'force-dynamic'
 
+function renderInline(text:string){
+ const parts=text.split(/(\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g)
+ return parts.map((part,index)=>{const match=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(!match)return <span key={index}>{part}</span>;return <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="text-verde underline underline-offset-4 decoration-verde/40 hover:decoration-verde">{match[1]}</a>})
+}
+
 export default async function ArticlePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const article = await getPublishedArticle(slug)
@@ -29,7 +34,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
         </div>
         {article.featured_image && <div className="mt-10 overflow-hidden md:mt-14"><img src={article.featured_image} alt="" className="aspect-[16/9] w-full object-cover" /></div>}
         <div className="mx-auto mt-12 max-w-[680px] md:mt-16">
-          {paragraphs.map((paragraph, index) => <p key={index} className="mb-7 text-[17px] leading-8 text-black/80 md:text-[18px] md:leading-9">{paragraph}</p>)}
+          {paragraphs.map((paragraph, index) => <p key={index} className="mb-7 text-[17px] leading-8 text-black/80 md:text-[18px] md:leading-9">{renderInline(paragraph)}</p>)}
           <div className="mt-14 border-t rule pt-6"><p className="eyebrow text-verde">INK VERDE</p><p className="mt-2 text-[12px] leading-5 text-black/55">Independent journalism on climate, economics, technology, Africa and the ideas shaping tomorrow.</p></div>
         </div>
       </article>
