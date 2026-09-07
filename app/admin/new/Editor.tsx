@@ -21,7 +21,8 @@ type InitialArticle = {
 
 type ImageEdit = {
   src: string
-  file: File | null
+  width: number
+  height: number
   ratio: number | null
   zoom: number
   x: number
@@ -31,8 +32,6 @@ type ImageEdit = {
   saturation: number
   rotation: number
   flip: boolean
-  outputWidth: number
-  outputHeight: number
 }
 
 function slugify(value: string) {
@@ -64,68 +63,46 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
   function openImageEditor(file: File) {
     const reader = new FileReader()
     reader.onload = () => {
-      setImageEditor({
-        src: String(reader.result),
-        file,
-        ratio: null,
-        zoom: 1,
-        x: 50,
-        y: 50,
-        brightness: 100,
-        contrast: 100,
-        saturation: 100,
-        rotation: 0,
-        flip: false,
-        outputWidth: 1600,
-        outputHeight: 900,
-      })
+      const src = String(reader.result)
+      const img = new Image()
+      img.onload = () => {
+        setImageEditor({ src, width: img.naturalWidth, height: img.naturalHeight, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
+      }
+      img.src = src
     }
     reader.readAsDataURL(file)
   }
 
   function editExistingImage() {
     if (!image) return
-    setImageEditor({
-      src: image,
-      file: null,
-      ratio: null,
-      zoom: 1,
-      x: 50,
-      y: 50,
-      brightness: 100,
-      contrast: 100,
-      saturation: 100,
-      rotation: 0,
-      flip: false,
-      outputWidth: 1600,
-      outputHeight: 900,
-    })
+    const img = new Image()
+    img.onload = () => {
+      setImageEditor({ src: image, width: img.naturalWidth || 1600, height: img.naturalHeight || 900, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
+    }
+    img.src = image
   }
 
-  function updateEdit<K extends keyof ImageEdit>(key: K, value: ImageEdit[K]) {
-    setImageEditor((prev) => (prev ? { ...prev, [key]: value } : prev))
+  function updateImage<K extends keyof ImageEdit>(key: K, value: ImageEdit[K]) {
+    setImageEditor((current) => current ? { ...current, [key]: value } : current)
   }
 
-  function setRatio(ratio: number | null) {
-    setImageEditor((prev) => {
-      if (!prev) return prev
-      return ratio === null
-        ? { ...prev, ratio: null }
-        : { ...prev, ratio, outputHeight: Math.round(prev.outputWidth / ratio) }
-    })
+  function chooseRatio(ratio: number | null) {
+    setImageEditor((current) => current ? { ...current, ratio } : current)
   }
 
-  function drawEditedImage(): Promise<Blob | null> {
+  function resetImage() {
+    setImageEditor((current) => current ? { ...current, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false } : current)
+  }
+
+  function renderEditedImage(): Promise<Blob | null> {
     return new Promise((resolve) => {
       const edit = imageEditor
       if (!edit) return resolve(null)
       const img = new Image()
       img.onload = () => {
         const canvas = canvasRef.current || document.createElement('canvas')
-        const width = Math.max(320, Math.min(4000, Math.round(edit.outputWidth)))
-        const height = edit.ratio
-          ? Math.round(width / edit.ratio)
-          : Math.max(240, Math.min(4000, Math.round(edit.outputHeight)))
+        const width = 1600
+        const height = edit.ratio ? Math.round(width / edit.ratio) : Math.min(1600, Math.max(400, edit.height))
         canvas.width = width
         canvas.height = height
         const ctx = canvas.getContext('2d')
@@ -137,9 +114,9 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
         ctx.rotate((edit.rotation * Math.PI) / 180)
         ctx.scale(edit.flip ? -1 : 1, 1)
 
-        const scale = Math.max(width / img.width, height / img.height) * edit.zoom
-        const drawWidth = img.width * scale
-        const drawHeight = img.height * scale
+        const scale = Math.max(width / img.naturalWidth, height / img.naturalHeight) * edit.zoom
+        const drawWidth = img.naturalWidth * scale
+        const drawHeight = img.naturalHeight * scale
         const maxX = Math.max(0, (drawWidth - width) / 2)
         const maxY = Math.max(0, (drawHeight - height) / 2)
         const offsetX = ((edit.x - 50) / 50) * maxX
@@ -158,50 +135,24 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     if (!imageEditor) return
     setBusy(true)
     setMessage('Processing image…')
-    const blob = await drawEditedImage()
+    const blob = await renderEditedImage()
     if (!blob) {
-      setMessage('Could not process image.')
+      setMessage('Could not process this image. Please try again.')
       setBusy(false)
       return
     }
-
     const path = `articles/${crypto.randomUUID()}.jpg`
-    const { error } = await supabase.storage.from('ink-verde-media').upload(path, blob, {
-      contentType: 'image/jpeg',
-      upsert: false,
-    })
+    const { error } = await supabase.storage.from('ink-verde-media').upload(path, blob, { contentType: 'image/jpeg', upsert: false })
     if (error) {
       setMessage(error.message)
       setBusy(false)
       return
     }
-
     const { data } = supabase.storage.from('ink-verde-media').getPublicUrl(path)
     setImage(data.publicUrl)
     setImageEditor(null)
-    setMessage('Image edited and ready.')
+    setMessage('Image saved and ready.')
     setBusy(false)
-  }
-
-  function resetImage() {
-    setImageEditor((prev) =>
-      prev
-        ? {
-            ...prev,
-            ratio: null,
-            zoom: 1,
-            x: 50,
-            y: 50,
-            brightness: 100,
-            contrast: 100,
-            saturation: 100,
-            rotation: 0,
-            flip: false,
-            outputWidth: 1600,
-            outputHeight: 900,
-          }
-        : prev,
-    )
   }
 
   function wrapSelection(prefix: string, suffix: string = prefix) {
@@ -232,17 +183,13 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
       return
     }
     const selected = body.slice(start, end)
-    const url = window.prompt('Paste the source URL:', 'https://')
-    if (!url) return
-    let href = url.trim()
+    const entered = window.prompt('Paste the source URL:', 'https://')
+    if (!entered) return
+    let href = entered.trim()
     if (!/^https?:\/\//i.test(href)) href = `https://${href}`
     const linked = `[${selected}](${href})`
     setBody(body.slice(0, start) + linked + body.slice(end))
     setMessage('Link added.')
-    requestAnimationFrame(() => {
-      el.focus()
-      el.setSelectionRange(start + linked.length, end + linked.length)
-    })
   }
 
   function insertColor(color: string) {
@@ -258,10 +205,6 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     const replacement = `<span style="color:${color}">${selected}</span>`
     setBody(body.slice(0, start) + replacement + body.slice(end))
     setMessage('Text colour added.')
-    requestAnimationFrame(() => {
-      el.focus()
-      el.setSelectionRange(start + replacement.length, start + replacement.length + selected.length)
-    })
   }
 
   async function save(status: 'draft' | 'published') {
@@ -271,6 +214,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     }
     setBusy(true)
     setMessage(status === 'published' ? 'Publishing…' : 'Saving draft…')
+
     const payload = {
       title: title.trim(),
       dek: dek.trim(),
@@ -280,12 +224,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
       read_time: readTime,
       featured_image: image || null,
       status,
-      published_at:
-        status === 'published'
-          ? initialArticle?.status === 'published'
-            ? undefined
-            : new Date().toISOString()
-          : null,
+      published_at: status === 'published' ? (initialArticle?.status === 'published' ? undefined : new Date().toISOString()) : null,
       updated_at: new Date().toISOString(),
     }
 
@@ -305,14 +244,13 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
       setBusy(false)
       return
     }
-
     setMessage(status === 'published' ? 'Published. The story is now live.' : 'Draft saved.')
     setBusy(false)
     if (status === 'published' && slug) router.push(`/article/${slug}`)
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault()
+  async function submit(event: FormEvent) {
+    event.preventDefault()
     await save('draft')
   }
 
@@ -331,74 +269,38 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
         <h1 className="serif mt-2 text-[50px] leading-none tracking-[-.05em]">{initialArticle ? 'Refine the story.' : 'Write the next story.'}</h1>
 
         <form onSubmit={submit} className="mt-10 space-y-7 bg-ivory p-6 md:p-10">
-          <label className="block">
-            <span className="eyebrow">SECTION</span>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none">
-              {sections.map((section) => <option key={section}>{section}</option>)}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="eyebrow">HEADLINE</span>
-            <input required value={title} onChange={(e) => setTitle(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 font-serif text-3xl outline-none" placeholder="Write a strong headline…" />
-          </label>
-
-          <label className="block">
-            <span className="eyebrow">DEK</span>
-            <textarea value={dek} onChange={(e) => setDek(e.target.value)} rows={2} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-base leading-6 outline-none" placeholder="One or two sentences that frame the story…" />
-          </label>
+          <label className="block"><span className="eyebrow">SECTION</span><select value={category} onChange={(e) => setCategory(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none">{sections.map((section) => <option key={section}>{section}</option>)}</select></label>
+          <label className="block"><span className="eyebrow">HEADLINE</span><input required value={title} onChange={(e) => setTitle(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 font-serif text-3xl outline-none" placeholder="Write a strong headline…" /></label>
+          <label className="block"><span className="eyebrow">DEK</span><textarea value={dek} onChange={(e) => setDek(e.target.value)} rows={2} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-base leading-6 outline-none" placeholder="One or two sentences that frame the story…" /></label>
 
           <div>
             <span className="eyebrow">FEATURE IMAGE</span>
             <div className="mt-2 flex flex-wrap gap-3">
-              <label className="cursor-pointer border border-black/20 px-5 py-3 text-[10px] font-bold tracking-[.13em]">
-                {busy ? 'WORKING…' : 'UPLOAD FROM GALLERY'}
-                <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) openImageEditor(file)
-                  e.currentTarget.value = ''
-                }} />
-              </label>
+              <label className="cursor-pointer border border-black/20 px-5 py-3 text-[10px] font-bold tracking-[.13em]">{busy ? 'WORKING…' : 'UPLOAD FROM GALLERY'}<input type="file" accept="image/*" className="hidden" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) openImageEditor(file); e.currentTarget.value = '' }} /></label>
               {image && <button type="button" onClick={editExistingImage} disabled={busy} className="border border-black/20 px-5 py-3 text-[10px] font-bold tracking-[.13em] disabled:opacity-50">EDIT IMAGE</button>}
               {image && <span className="self-center text-[11px] text-verde">✓ Image ready</span>}
             </div>
             {image && <img src={image} alt="Selected feature" className="mt-4 aspect-[16/8] w-full object-cover" />}
-            <p className="mt-2 text-[11px] leading-5 text-black/50">Upload an image, then crop, resize, reposition, rotate, flip and adjust it before saving.</p>
+            <p className="mt-2 text-[11px] leading-5 text-black/50">Upload first, then choose the crop, position, size and visual adjustments yourself.</p>
           </div>
 
-          <label className="block">
-            <span className="eyebrow">AUTHOR</span>
-            <input value={author} onChange={(e) => setAuthor(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none" />
-          </label>
-
-          <label className="block">
-            <span className="eyebrow">READING TIME</span>
-            <input value={readTime} onChange={(e) => setReadTime(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none" />
-          </label>
+          <label className="block"><span className="eyebrow">AUTHOR</span><input value={author} onChange={(e) => setAuthor(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none" /></label>
+          <label className="block"><span className="eyebrow">READING TIME</span><input value={readTime} onChange={(e) => setReadTime(e.target.value)} className="mt-2 w-full border-b border-black/20 bg-transparent py-3 text-sm outline-none" /></label>
 
           <div>
             <span className="eyebrow">STORY</span>
             <div className="mt-2 flex flex-wrap items-center gap-2 border border-black/10 border-b-0 bg-white/70 px-3 py-2">
-              <button type="button" onClick={() => wrapSelection('**')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em] hover:bg-black/5"><strong>B</strong> BOLD</button>
-              <button type="button" onClick={() => wrapSelection('*')} className="border border-black/15 px-3 py-2 text-[10px] font-bold italic tracking-[.1em] hover:bg-black/5"><em>I</em> ITALIC</button>
-              <button type="button" onClick={() => insertColor('#244C3A')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em] text-verde hover:bg-black/5">A GREEN</button>
-              <button type="button" onClick={() => insertColor('#8B5E3C')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em] hover:bg-black/5">A WARM</button>
-              <button type="button" onClick={addLink} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em] hover:bg-black/5">🔗 ADD LINK</button>
+              <button type="button" onClick={() => wrapSelection('**')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em]"><strong>B</strong> BOLD</button>
+              <button type="button" onClick={() => wrapSelection('*')} className="border border-black/15 px-3 py-2 text-[10px] font-bold italic tracking-[.1em]"><em>I</em> ITALIC</button>
+              <button type="button" onClick={() => insertColor('#244C3A')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em] text-verde">A GREEN</button>
+              <button type="button" onClick={() => insertColor('#8B5E3C')} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em]">A WARM</button>
+              <button type="button" onClick={addLink} className="border border-black/15 px-3 py-2 text-[10px] font-bold tracking-[.1em]">🔗 ADD LINK</button>
               <span className="text-[10px] text-black/45">Highlight text first, then choose a style.</span>
             </div>
             <textarea ref={bodyRef} required value={body} onChange={(e) => setBody(e.target.value)} rows={18} className="w-full border border-black/10 bg-white/50 p-4 text-[16px] leading-8 outline-none" placeholder="Start writing… Separate paragraphs with blank lines." />
           </div>
 
-          {preview && (
-            <div className="border-t border-black/10 pt-7">
-              <p className="eyebrow text-verde">PREVIEW</p>
-              <h2 className="serif mt-3 text-4xl leading-none">{title || 'Your headline'}</h2>
-              <p className="mt-4 text-sm leading-6 text-black/60">{dek}</p>
-              <div className="mt-5 space-y-5 text-[16px] leading-8">
-                {body.split(/\n\s*\n/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-              </div>
-            </div>
-          )}
+          {preview && <div className="border-t border-black/10 pt-7"><p className="eyebrow text-verde">PREVIEW</p><h2 className="serif mt-3 text-4xl leading-none">{title || 'Your headline'}</h2><p className="mt-4 text-sm leading-6 text-black/60">{dek}</p><div className="mt-5 space-y-5 text-[16px] leading-8">{body.split(/\n\s*\n/).filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div></div>}
 
           <div className="flex flex-wrap items-center gap-3 border-t border-black/10 pt-6">
             <button type="submit" disabled={busy} className="border border-black/20 px-5 py-3 text-[10px] font-bold tracking-[.13em] disabled:opacity-50">SAVE DRAFT</button>
@@ -410,99 +312,41 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
       </div>
 
       {imageEditor && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 p-4 md:p-8">
-          <div className="mx-auto my-4 max-w-[1180px] overflow-hidden bg-ivory shadow-2xl">
-            <div className="flex items-start justify-between border-b rule px-6 py-5 md:px-8">
-              <div>
-                <p className="serif text-3xl tracking-[-.03em]">Edit Image</p>
-                <p className="mt-1 text-xs text-black/55">Crop, resize and adjust your image before it becomes the story’s feature image.</p>
-              </div>
-              <button type="button" onClick={() => setImageEditor(null)} className="text-2xl leading-none">×</button>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 md:p-8">
+          <div className="mx-auto max-w-[1100px] overflow-hidden bg-ivory shadow-2xl">
+            <div className="flex items-start justify-between border-b rule px-6 py-5">
+              <div><h2 className="serif text-3xl">Edit Image</h2><p className="mt-1 text-xs text-black/55">Crop, resize, reposition and adjust your photo before saving it.</p></div>
+              <button type="button" onClick={() => setImageEditor(null)} className="text-2xl">×</button>
             </div>
 
-            <div className="grid md:grid-cols-[1.15fr_.85fr]">
+            <div className="grid md:grid-cols-[1.1fr_.9fr]">
               <div className="bg-[#222] p-5 md:p-8">
-                <div className="relative mx-auto aspect-[16/10] max-h-[70vh] overflow-hidden border border-white/20 bg-black">
-                  <img
-                    src={imageEditor.src}
-                    alt="Image crop preview"
-                    className="absolute left-1/2 top-1/2 max-w-none"
-                    style={{
-                      width: `${imageEditor.zoom * 100}%`,
-                      height: 'auto',
-                      transform: `translate(-${imageEditor.x}%, -${imageEditor.y}%) rotate(${imageEditor.rotation}deg) scaleX(${imageEditor.flip ? -1 : 1})`,
-                      filter: `brightness(${imageEditor.brightness}%) contrast(${imageEditor.contrast}%) saturate(${imageEditor.saturation}%)`,
-                    }}
-                  />
-                  <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-35">
-                    {Array.from({ length: 9 }).map((_, index) => <div key={index} className="border border-white/30" />)}
-                  </div>
+                <div className="relative mx-auto aspect-[16/10] max-h-[65vh] overflow-hidden bg-black">
+                  <img src={imageEditor.src} alt="Crop preview" className="absolute left-1/2 top-1/2 max-w-none" style={{ width: `${imageEditor.zoom * 100}%`, transform: `translate(-${imageEditor.x}%, -${imageEditor.y}%) rotate(${imageEditor.rotation}deg) scaleX(${imageEditor.flip ? -1 : 1})`, filter: `brightness(${imageEditor.brightness}%) contrast(${imageEditor.contrast}%) saturate(${imageEditor.saturation}%)` }} />
+                  <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-30"><div className="border-r border-b border-white" /><div className="border-r border-b border-white" /><div className="border-b border-white" /><div className="border-r border-b border-white" /><div className="border-r border-b border-white" /><div className="border-b border-white" /><div className="border-r border-white" /><div className="border-r border-white" /><div /></div>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-bold tracking-[.1em] text-white">
-                  <button type="button" onClick={() => updateEdit('rotation', (imageEditor.rotation + 90) % 360)} className="border border-white/25 px-3 py-2">↻ ROTATE</button>
-                  <button type="button" onClick={() => updateEdit('flip', !imageEditor.flip)} className="border border-white/25 px-3 py-2">↔ FLIP</button>
-                  <button type="button" onClick={resetImage} className="border border-white/25 px-3 py-2">↺ RESET</button>
-                </div>
+                <p className="mt-3 text-center text-[10px] tracking-[.12em] text-white/60">DRAG CONTROLS ON THE RIGHT TO FRAME THE PHOTO</p>
               </div>
 
               <div className="space-y-6 p-6 md:p-8">
-                <div>
-                  <p className="eyebrow">CROP RATIO</p>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {[['FREE', null], ['1:1', 1], ['4:3', 4 / 3], ['3:4', 3 / 4], ['16:9', 16 / 9]].map(([label, ratio]) => (
-                      <button key={String(label)} type="button" onClick={() => setRatio(ratio as number | null)} className={`border px-3 py-3 text-[10px] font-bold tracking-[.08em] ${imageEditor.ratio === ratio ? 'border-verde text-verde' : 'border-black/15'}`}>{label}</button>
-                    ))}
-                  </div>
-                </div>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">ZOOM</span><span className="text-xs">{Math.round(imageEditor.zoom * 100)}%</span></div>
-                  <input type="range" min="1" max="3" step="0.01" value={imageEditor.zoom} onChange={(e) => updateEdit('zoom', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">HORIZONTAL POSITION</span><span className="text-xs">{Math.round(imageEditor.x)}%</span></div>
-                  <input type="range" min="0" max="100" value={imageEditor.x} onChange={(e) => updateEdit('x', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">VERTICAL POSITION</span><span className="text-xs">{Math.round(imageEditor.y)}%</span></div>
-                  <input type="range" min="0" max="100" value={imageEditor.y} onChange={(e) => updateEdit('y', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">BRIGHTNESS</span><span className="text-xs">{imageEditor.brightness}</span></div>
-                  <input type="range" min="50" max="150" value={imageEditor.brightness} onChange={(e) => updateEdit('brightness', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">CONTRAST</span><span className="text-xs">{imageEditor.contrast}</span></div>
-                  <input type="range" min="50" max="150" value={imageEditor.contrast} onChange={(e) => updateEdit('contrast', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <label className="block">
-                  <div className="flex justify-between"><span className="eyebrow">SATURATION</span><span className="text-xs">{imageEditor.saturation}</span></div>
-                  <input type="range" min="0" max="180" value={imageEditor.saturation} onChange={(e) => updateEdit('saturation', Number(e.target.value))} className="mt-3 w-full accent-[#244C3A]" />
-                </label>
-
-                <div>
-                  <p className="eyebrow">OUTPUT SIZE</p>
-                  <div className="mt-2 grid grid-cols-2 gap-3">
-                    <label className="text-xs">WIDTH<input type="number" min="320" max="4000" value={imageEditor.outputWidth} onChange={(e) => updateEdit('outputWidth', Math.max(320, Number(e.target.value)))} className="mt-1 w-full border border-black/15 bg-transparent px-3 py-2" /></label>
-                    <label className="text-xs">HEIGHT<input type="number" min="240" max="4000" value={imageEditor.outputHeight} onChange={(e) => updateEdit('outputHeight', Math.max(240, Number(e.target.value)))} className="mt-1 w-full border border-black/15 bg-transparent px-3 py-2" /></label>
-                  </div>
-                </div>
+                <div><p className="eyebrow">CROP RATIO</p><div className="mt-2 grid grid-cols-5 gap-2">{[[null, 'FREE'], [1, '1:1'], [4 / 3, '4:3'], [3 / 4, '3:4'], [16 / 9, '16:9']].map(([value, label]) => <button key={label as string} type="button" onClick={() => chooseRatio(value as number | null)} className={`border px-2 py-3 text-[10px] font-bold ${imageEditor.ratio === value ? 'border-verde text-verde' : 'border-black/15'}`}>{label as string}</button>)}</div></div>
+                <label className="block"><span className="eyebrow">ZOOM</span><input className="mt-2 w-full" type="range" min="1" max="3" step="0.01" value={imageEditor.zoom} onChange={(e) => updateImage('zoom', Number(e.target.value))} /></label>
+                <label className="block"><span className="eyebrow">HORIZONTAL POSITION</span><input className="mt-2 w-full" type="range" min="0" max="100" value={imageEditor.x} onChange={(e) => updateImage('x', Number(e.target.value))} /></label>
+                <label className="block"><span className="eyebrow">VERTICAL POSITION</span><input className="mt-2 w-full" type="range" min="0" max="100" value={imageEditor.y} onChange={(e) => updateImage('y', Number(e.target.value))} /></label>
+                <label className="block"><span className="eyebrow">BRIGHTNESS</span><input className="mt-2 w-full" type="range" min="50" max="150" value={imageEditor.brightness} onChange={(e) => updateImage('brightness', Number(e.target.value))} /></label>
+                <label className="block"><span className="eyebrow">CONTRAST</span><input className="mt-2 w-full" type="range" min="50" max="150" value={imageEditor.contrast} onChange={(e) => updateImage('contrast', Number(e.target.value))} /></label>
+                <label className="block"><span className="eyebrow">SATURATION</span><input className="mt-2 w-full" type="range" min="0" max="180" value={imageEditor.saturation} onChange={(e) => updateImage('saturation', Number(e.target.value))} /></label>
+                <div className="flex flex-wrap gap-2"><button type="button" onClick={() => updateImage('rotation', (imageEditor.rotation + 90) % 360)} className="border border-black/15 px-4 py-2 text-[10px] font-bold">↻ ROTATE</button><button type="button" onClick={() => updateImage('flip', !imageEditor.flip)} className="border border-black/15 px-4 py-2 text-[10px] font-bold">↔ FLIP</button><button type="button" onClick={resetImage} className="border border-black/15 px-4 py-2 text-[10px] font-bold">RESET</button></div>
+                <div className="border-t rule pt-5"><p className="text-xs leading-5 text-black/55">The original upload is kept separate. Saving creates a prepared feature image, so you can experiment without losing the original.</p></div>
               </div>
             </div>
 
-            <div className="flex flex-wrap justify-end gap-3 border-t rule px-6 py-5 md:px-8">
-              <button type="button" onClick={() => setImageEditor(null)} disabled={busy} className="border border-black/15 px-5 py-3 text-[10px] font-bold tracking-[.12em]">CANCEL</button>
-              <button type="button" onClick={saveImageEdits} disabled={busy} className="bg-verde px-5 py-3 text-[10px] font-bold tracking-[.12em] text-ivory disabled:opacity-50">{busy ? 'PROCESSING…' : 'SAVE IMAGE'}</button>
-            </div>
+            <div className="flex justify-end gap-3 border-t rule px-6 py-5"><button type="button" onClick={() => setImageEditor(null)} className="border border-black/20 px-5 py-3 text-[10px] font-bold tracking-[.13em]">CANCEL</button><button type="button" onClick={saveImageEdits} disabled={busy} className="bg-verde px-5 py-3 text-[10px] font-bold tracking-[.13em] text-ivory disabled:opacity-50">{busy ? 'SAVING…' : 'SAVE IMAGE'}</button></div>
           </div>
-          <canvas ref={canvasRef} className="hidden" />
         </div>
       )}
+
+      <canvas ref={canvasRef} className="hidden" />
     </main>
   )
 }
