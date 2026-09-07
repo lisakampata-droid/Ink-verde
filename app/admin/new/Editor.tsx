@@ -65,9 +65,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     reader.onload = () => {
       const src = String(reader.result)
       const img = new Image()
-      img.onload = () => {
-        setImageEditor({ src, width: img.naturalWidth, height: img.naturalHeight, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
-      }
+      img.onload = () => setImageEditor({ src, width: img.naturalWidth, height: img.naturalHeight, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
       img.src = src
     }
     reader.readAsDataURL(file)
@@ -77,9 +75,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     if (!image) return
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.onload = () => {
-      setImageEditor({ src: image, width: img.naturalWidth || 1600, height: img.naturalHeight || 900, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
-    }
+    img.onload = () => setImageEditor({ src: image, width: img.naturalWidth || 1600, height: img.naturalHeight || 900, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })
     img.src = image
   }
 
@@ -110,8 +106,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     try {
       const canvas = canvasRef.current
       const targetRatio = imageEditor.ratio || imageEditor.width / imageEditor.height
-      const maxWidth = 1600
-      const outWidth = maxWidth
+      const outWidth = 1600
       const outHeight = Math.max(1, Math.round(outWidth / targetRatio))
       canvas.width = outWidth
       canvas.height = outHeight
@@ -146,8 +141,8 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9))
       if (!blob) throw new Error('Could not create edited image')
       const path = `articles/${crypto.randomUUID()}.jpg`
-      const { error: uploadError } = await supabase.storage.from('ink-verde-media').upload(path, blob, { contentType: 'image/jpeg', upsert: false })
-      if (uploadError) throw uploadError
+      const { error } = await supabase.storage.from('ink-verde-media').upload(path, blob, { contentType: 'image/jpeg', upsert: false })
+      if (error) throw error
       const { data } = supabase.storage.from('ink-verde-media').getPublicUrl(path)
       setImage(data.publicUrl)
       setImageEditor(null)
@@ -167,22 +162,27 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
     return data.publicUrl
   }
 
-  async function handleSubmit(event: FormEvent) {
+  async function handleSubmit(event: FormEvent, desiredStatus: 'draft' | 'published') {
     event.preventDefault()
     setBusy(true)
-    setMessage('Saving…')
+    setMessage(desiredStatus === 'published' ? 'Publishing…' : 'Saving draft…')
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       if (!sessionData.session) throw new Error('Please sign in again.')
-      const payload = { title, dek, category, body, author, read_time: readTime, featured_image: image || null, status: initialArticle?.status || 'draft', updated_at: new Date().toISOString() }
+      const now = new Date().toISOString()
+      const payload = { title, dek, category, body, author, read_time: readTime, featured_image: image || null, status: desiredStatus, updated_at: now }
       if (initialArticle?.id) {
-        const { error } = await supabase.from('articles').update(payload).eq('id', initialArticle.id)
+        const updatePayload: any = { ...payload }
+        if (desiredStatus === 'published') updatePayload.published_at = initialArticle.status === 'published' ? undefined : now
+        else updatePayload.published_at = null
+        const { error } = await supabase.from('articles').update(updatePayload).eq('id', initialArticle.id)
         if (error) throw error
-        setMessage('Story saved.')
+        setMessage(desiredStatus === 'published' ? 'Story published successfully.' : 'Draft saved.')
+        if (desiredStatus === 'published') router.push(`/article/${slugify(title)}`)
       } else {
-        const { error } = await supabase.from('articles').insert({ ...payload, slug: slugify(title), published_at: payload.status === 'published' ? new Date().toISOString() : null })
+        const { error } = await supabase.from('articles').insert({ ...payload, slug: slugify(title), published_at: desiredStatus === 'published' ? now : null })
         if (error) throw error
-        setMessage('Story created.')
+        setMessage(desiredStatus === 'published' ? 'Story published successfully.' : 'Draft saved.')
         router.push('/admin')
       }
     } catch (error: any) {
@@ -194,7 +194,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
 
   if (preview) {
     return (
-      <main className="min-h-screen bg-[#f7f5ef] text-[#111] px-6 py-12">
+      <main className="min-h-screen bg-[#f7f5ef] px-6 py-12 text-[#111]">
         <div className="mx-auto max-w-3xl">
           <button onClick={() => setPreview(false)} className="mb-10 text-sm underline">← Back to editor</button>
           <div className="text-xs tracking-[0.2em] text-[#244c3a]">{category}</div>
@@ -215,7 +215,7 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
           <button type="button" onClick={() => setPreview(true)} className="border border-black/20 px-4 py-2 text-sm">Preview</button>
         </div>
       </header>
-      <form onSubmit={handleSubmit} className="mx-auto grid max-w-6xl gap-8 px-6 py-10 lg:grid-cols-[1fr_320px]">
+      <form onSubmit={e => e.preventDefault()} className="mx-auto grid max-w-6xl gap-8 px-6 py-10 lg:grid-cols-[1fr_320px]">
         <section className="space-y-6">
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Headline" className="w-full bg-transparent font-serif text-5xl outline-none placeholder:text-black/25" required />
           <textarea value={dek} onChange={e => setDek(e.target.value)} placeholder="Standfirst / dek" className="min-h-24 w-full resize-none bg-transparent text-xl outline-none placeholder:text-black/25" />
@@ -243,7 +243,11 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
             <input type="file" accept="image/*" className="mt-4 w-full text-sm" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; try { setBusy(true); const url = await uploadOriginal(file); setImage(url); openImageEditor(file); setMessage('Image loaded. Edit it, then save the edit.'); } catch (error: any) { setMessage(error?.message || 'Upload failed.'); } finally { setBusy(false) } }} />
           </div>
           <div className="bg-[#244c3a] p-5 text-[#f7f5ef]">
-            <button disabled={busy} className="w-full bg-[#f7f5ef] px-4 py-3 text-sm font-medium text-[#111]">{initialArticle ? 'Save story' : 'Publish story'}</button>
+            <div className="mb-3 text-xs uppercase tracking-[0.15em] text-white/70">Publication</div>
+            <div className="grid gap-2">
+              <button type="button" disabled={busy} onClick={e => handleSubmit(e as unknown as FormEvent, 'published')} className="w-full bg-[#f7f5ef] px-4 py-3 text-sm font-semibold text-[#111] disabled:opacity-50">{busy ? 'Working…' : 'Publish story'}</button>
+              <button type="button" disabled={busy} onClick={e => handleSubmit(e as unknown as FormEvent, 'draft')} className="w-full border border-white/40 px-4 py-3 text-sm text-white disabled:opacity-50">Save as draft</button>
+            </div>
             {message && <p className="mt-3 text-xs text-white/80">{message}</p>}
           </div>
         </aside>
@@ -255,16 +259,16 @@ export default function Editor({ initialArticle }: { initialArticle?: InitialArt
             <div className="mt-5 grid gap-6 lg:grid-cols-[1fr_320px]">
               <div className="bg-black p-3"><img src={imageEditor.src} alt="Editing preview" className="mx-auto max-h-[60vh] max-w-full object-contain" style={{ filter: `brightness(${imageEditor.brightness}%) contrast(${imageEditor.contrast}%) saturate(${imageEditor.saturation}%)`, transform: `rotate(${imageEditor.rotation}deg) scaleX(${imageEditor.flip ? -1 : 1}) scale(${imageEditor.zoom})` }} /></div>
               <div className="space-y-4 text-sm">
-                <label className="block">Crop ratio<select value={imageEditor.ratio ?? ''} onChange={e => setImageEditor({...imageEditor, ratio: e.target.value ? Number(e.target.value) : null})} className="mt-1 w-full border p-2"><option value="">FREE</option><option value={1}>1:1</option><option value={4/3}>4:3</option><option value={3/4}>3:4</option><option value={16/9}>16:9</option></select></label>
-                <label className="block">Zoom<input type="range" min="1" max="3" step="0.05" value={imageEditor.zoom} onChange={e => setImageEditor({...imageEditor, zoom: Number(e.target.value)})} className="w-full" /></label>
-                <label className="block">Horizontal position<input type="range" min="0" max="100" value={imageEditor.x} onChange={e => setImageEditor({...imageEditor, x: Number(e.target.value)})} className="w-full" /></label>
-                <label className="block">Vertical position<input type="range" min="0" max="100" value={imageEditor.y} onChange={e => setImageEditor({...imageEditor, y: Number(e.target.value)})} className="w-full" /></label>
-                <label className="block">Brightness<input type="range" min="50" max="150" value={imageEditor.brightness} onChange={e => setImageEditor({...imageEditor, brightness: Number(e.target.value)})} className="w-full" /></label>
-                <label className="block">Contrast<input type="range" min="50" max="150" value={imageEditor.contrast} onChange={e => setImageEditor({...imageEditor, contrast: Number(e.target.value)})} className="w-full" /></label>
-                <label className="block">Saturation<input type="range" min="0" max="150" value={imageEditor.saturation} onChange={e => setImageEditor({...imageEditor, saturation: Number(e.target.value)})} className="w-full" /></label>
-                <div className="flex gap-2"><button type="button" onClick={() => setImageEditor({...imageEditor, rotation: (imageEditor.rotation + 90) % 360})} className="border px-3 py-2">Rotate 90°</button><button type="button" onClick={() => setImageEditor({...imageEditor, flip: !imageEditor.flip})} className="border px-3 py-2">Flip</button></div>
-                <button type="button" onClick={() => setImageEditor({...imageEditor, ratio: 16/9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false})} className="text-xs underline">Reset</button>
-                <div className="flex gap-2 pt-2"><button type="button" disabled={busy} onClick={saveImageEdit} className="flex-1 bg-[#244c3a] px-4 py-3 text-[#f7f5ef]">Save edited image</button><button type="button" onClick={() => setImageEditor(null)} className="border px-4 py-3">Cancel</button></div>
+                <label className="block">Crop ratio<select value={imageEditor.ratio ?? ''} onChange={e => setImageEditor({ ...imageEditor, ratio: e.target.value ? Number(e.target.value) : null })} className="mt-1 w-full border p-2"><option value="">FREE</option><option value={1}>1:1</option><option value={4 / 3}>4:3</option><option value={3 / 4}>3:4</option><option value={16 / 9}>16:9</option></select></label>
+                <label className="block">Zoom<input type="range" min="1" max="3" step="0.1" value={imageEditor.zoom} onChange={e => setImageEditor({ ...imageEditor, zoom: Number(e.target.value) })} className="w-full" /></label>
+                <label className="block">Horizontal position<input type="range" min="0" max="100" value={imageEditor.x} onChange={e => setImageEditor({ ...imageEditor, x: Number(e.target.value) })} className="w-full" /></label>
+                <label className="block">Vertical position<input type="range" min="0" max="100" value={imageEditor.y} onChange={e => setImageEditor({ ...imageEditor, y: Number(e.target.value) })} className="w-full" /></label>
+                <label className="block">Brightness<input type="range" min="50" max="150" value={imageEditor.brightness} onChange={e => setImageEditor({ ...imageEditor, brightness: Number(e.target.value) })} className="w-full" /></label>
+                <label className="block">Contrast<input type="range" min="50" max="150" value={imageEditor.contrast} onChange={e => setImageEditor({ ...imageEditor, contrast: Number(e.target.value) })} className="w-full" /></label>
+                <label className="block">Saturation<input type="range" min="0" max="200" value={imageEditor.saturation} onChange={e => setImageEditor({ ...imageEditor, saturation: Number(e.target.value) })} className="w-full" /></label>
+                <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setImageEditor({ ...imageEditor, rotation: (imageEditor.rotation + 90) % 360 })} className="border px-3 py-2">Rotate 90°</button><button type="button" onClick={() => setImageEditor({ ...imageEditor, flip: !imageEditor.flip })} className="border px-3 py-2">Flip</button></div>
+                <button type="button" onClick={() => setImageEditor({ ...imageEditor, ratio: 16 / 9, zoom: 1, x: 50, y: 50, brightness: 100, contrast: 100, saturation: 100, rotation: 0, flip: false })} className="w-full border px-3 py-2">Reset edits</button>
+                <div className="grid grid-cols-2 gap-2 pt-2"><button type="button" onClick={() => setImageEditor(null)} className="border px-3 py-2">Cancel</button><button type="button" disabled={busy} onClick={saveImageEdit} className="bg-[#244c3a] px-3 py-2 text-white">Save image</button></div>
               </div>
             </div>
             <canvas ref={canvasRef} className="hidden" />
